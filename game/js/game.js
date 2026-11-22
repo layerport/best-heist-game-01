@@ -29,6 +29,9 @@
   let keysDown;
   let moveTarget;
   let mouseAt;
+  let ventCrawl; // null, or the crawl in progress (routes.js)
+  let seenGrace; // seconds of fair warning left after first being spotted
+  let seenLast; // was the thief seen on the previous tick?
 
   function resetVaultRun() {
     vault = buildVaultRoom();
@@ -56,6 +59,9 @@
     keysDown = {};
     moveTarget = null;
     mouseAt = { x: VAULT_WIDTH / 2, y: VAULT_HEIGHT / 2 };
+    ventCrawl = null;
+    seenGrace = 0;
+    seenLast = false;
   }
 
   resetVaultRun();
@@ -160,6 +166,8 @@
   // --- update: one tick of the heist, dt seconds ---
 
   function vaultThiefSeenNow() {
+    // Crawling through a vent, the thief is out of sight entirely.
+    if (ventCrawl && ventCrawl.timer > 0) return null;
     for (const guard of guards) {
       if (guardSeesThief(guard, thief, vault, smokes)) return 'guard';
     }
@@ -173,7 +181,28 @@
     timeNow += dt;
     elapsed += dt;
 
+    // Vent crawl: hidden in the shaft, no moving, no seeing, no being seen.
+    // The crawl object stays until its cooldown lapses, so the thief does
+    // not bounce straight back into the grate it just left.
+    if (ventCrawl) {
+      if (ventCrawl.timer > 0) {
+        const result = vaultUpdateVentCrawl(ventCrawl, thief, dt);
+        if (result === 'arrived') sound.pickup();
+      } else if (ventCrawl.cooldown > 0) {
+        ventCrawl.cooldown -= dt;
+        if (ventCrawl.cooldown <= 0) ventCrawl = null;
+      }
+    } else {
+      const vent = vaultVentAt(thief.x, thief.y, vault);
+      if (vent) {
+        ventCrawl = vaultStartVentCrawl(vent);
+        moveTarget = null;
+      }
+    }
+    const crawlingNow = ventCrawl && ventCrawl.timer > 0;
+
     // Move the thief: keys win over click-to-move, and clear the click target.
+    if (!crawlingNow) {
     let mx = 0;
     let my = 0;
     if (keysDown['w'] || keysDown['ArrowUp']) my -= 1;
@@ -200,8 +229,9 @@
         sound.step(timeNow * 1000);
       }
     }
+    }
 
-    for (const guard of guards) updateGuard(guard, dt, timeNow);
+    for (const guard of guards) updateGuard(guard, dt, timeNow, vaultGetawayGuardSpeedMult(vault));
     for (const camera of cameras) updateCamera(camera, dt);
     if (jamTimer > 0) jamTimer -= dt;
     for (const smoke of smokes) smoke.timer -= dt;
@@ -209,11 +239,18 @@
     for (const ping of noisePings) ping.timer -= dt;
     noisePings = noisePings.filter((p) => p.timer > 0);
 
-    // The alarm: seen and it climbs, hidden and it drains.
+    // The alarm: seen and it climbs, hidden and it drains. The first sight
+    // of a run gets a short grace — the alarm climbs slowly for 0.6 seconds
+    // while a red "!" warns the thief — so being caught is always fair.
+    // During the getaway the museum stays on edge and the alarm drains slow.
     const seenBy = vaultThiefSeenNow();
-    if (seenBy === 'guard') alarm += ALARM_GUARD_RATE * dt;
-    else if (seenBy === 'camera') alarm += ALARM_CAMERA_RATE * dt;
-    else alarm -= ALARM_DECAY_RATE * dt;
+    if (seenBy && !seenLast) seenGrace = 0.6;
+    seenLast = !!seenBy;
+    if (seenGrace > 0) seenGrace -= dt;
+    const climbMult = seenGrace > 0 ? 0.35 : 1;
+    if (seenBy === 'guard') alarm += ALARM_GUARD_RATE * climbMult * dt;
+    else if (seenBy === 'camera') alarm += ALARM_CAMERA_RATE * climbMult * dt;
+    else alarm -= ALARM_DECAY_RATE * vaultGetawayAlarmDecayMult(vault) * dt;
     alarm = vaultClamp(alarm, 0, 100);
     if (alarm >= ALARM_WARN_AT) {
       if (alarmWasBelowWarn) spottings += 1;
@@ -309,6 +346,8 @@
     ctx.strokeStyle = VAULT_COLORS.goldDim;
     ctx.lineWidth = 2;
     ctx.strokeRect(b.x + 7, b.y + 7, b.w - 14, b.h - 14);
+    // The vent grates: the second route, readable on the floor itself.
+    drawVaultVents(ctx, vault, timeNow, ventCrawl);
   }
 
   function drawVaultCover() {
@@ -482,7 +521,7 @@
     for (const guard of guards) {
       ctx.beginPath();
       ctx.arc(guard.x, guard.y, guard.r, 0, Math.PI * 2);
-      ctx.fillStyle = guard.state === 'lured' ? '#7c5a1e' : VAULT_COLORS.guard;
+      ctx.fillStyle = guard.state === 'lured' ? '#7c5a1e' : guard.state === 'survey' ? '#5a6e2c' : VAULT_COLORS.guard;
       ctx.fill();
       ctx.strokeStyle = VAULT_COLORS.guardTrim;
       ctx.lineWidth = 2;
@@ -518,6 +557,14 @@
     ctx.font = 'bold 11px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('YOU', thief.x, thief.y - thief.r - 8);
+    // The fair warning: a red "!" over the thief while spotted, brightest
+    // during the grace window, so the alarm never feels like a jump scare.
+    if (state === 'playing' && (seenGrace > 0 || vaultThiefSeenNow())) {
+      ctx.fillStyle = '#ff5a5a';
+      ctx.font = 'bold 22px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('!', thief.x, thief.y - thief.r - 26);
+    }
     if (moveTarget) {
       ctx.beginPath();
       ctx.arc(moveTarget.x, moveTarget.y, 7, 0, Math.PI * 2);
@@ -545,7 +592,7 @@
     ctx.fillText('THE MIDNIGHT VAULT', 16, 27);
     ctx.fillStyle = VAULT_COLORS.textDim;
     ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText('Steal the diamond. Reach the green exit.', 16, 48);
+    ctx.fillText(vault.loot.taken ? 'Diamond stolen — run for the green exit!' : 'Steal the diamond. Reach the green exit.', 16, 48);
 
     // Alarm meter: the big bar in the middle of the HUD.
     const meterX = 470;
@@ -618,6 +665,7 @@
     drawVaultLootAndExit();
     drawVaultCover();
     drawVaultWatchers();
+    drawVaultGetaway(ctx, thief, vault, timeNow);
     drawVaultLootLabel();
     drawVaultHud();
     if (state === 'title') {
@@ -683,6 +731,26 @@
       guards[1].sweepPhase = -0.3;
       alarm = 12;
       coins = 4;
+    } else if (name === 'cover') {
+      // The cover frame: every criterion-1 element in one readable shot —
+      // thief mid-room, both guard cones sweeping, both camera cones clear
+      // of the diamond label, loot glowing, alarm on the rise, vents visible.
+      thief.x = 520;
+      thief.y = 520;
+      thief.facing = -Math.PI / 2;
+      guards[0].x = 560;
+      guards[0].y = 260;
+      guards[0].facing = Math.PI;
+      guards[0].sweepPhase = 0.4;
+      guards[1].x = 760;
+      guards[1].y = 470;
+      guards[1].facing = 0;
+      guards[1].sweepPhase = -0.3;
+      cameras[0].sweepPhase = 1.35;
+      cameras[1].sweepPhase = -0.69;
+      alarm = 23;
+      coins = 5;
+      elapsed = 41;
     } else if (name === 'cone-close') {
       thief.x = 700;
       thief.y = 300;
@@ -738,6 +806,8 @@
         smokes: smokes.length,
         jamTimer: Math.max(0, jamTimer),
         camerasJammed: cameras.every((c) => c.jamTimer > 0),
+        crawling: !!(ventCrawl && ventCrawl.timer > 0),
+        getaway: vaultGetawayActive(vault),
         elapsed: Math.round(elapsed),
         guards: guards.map((g) => ({ name: g.name, x: Math.round(g.x), y: Math.round(g.y), state: g.state })),
       };

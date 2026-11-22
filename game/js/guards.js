@@ -38,6 +38,10 @@ function createGuard(route) {
     luredTo: null,
     lureTimer: 0,
     state: 'patrol',
+    pauseTimer: 0,
+    pauseSeconds: route.pauseSeconds || 0,
+    surveyBase: 0,
+    surveyPhase: 0,
   };
   guard.facing = Math.atan2(
     route.waypoints[1].y - start.y,
@@ -47,33 +51,49 @@ function createGuard(route) {
 }
 
 // Walk toward (tx, ty) at the guard's speed; returns true when arrived.
-function vaultGuardWalkTo(guard, tx, ty, dt) {
+function vaultGuardWalkTo(guard, tx, ty, dt, speedMult) {
   const dx = tx - guard.x;
   const dy = ty - guard.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
   if (dist < 4) return true;
-  const step = Math.min(dist, guard.speed * dt);
+  const step = Math.min(dist, guard.speed * (speedMult || 1) * dt);
   guard.x += (dx / dist) * step;
   guard.y += (dy / dist) * step;
   guard.facing = Math.atan2(dy, dx);
   return false;
 }
 
-// Advance one guard by dt seconds. Lured guards detour; the rest patrol.
-function updateGuard(guard, dt, timeNow) {
+// Advance one guard by dt seconds. Lured guards detour; the rest patrol,
+// pausing at each waypoint to survey the room. speedMult lets the getaway
+// phase hurry the guards without touching their base speed.
+function updateGuard(guard, dt, timeNow, speedMult) {
   guard.sweepPhase += dt * GUARD_SWEEP_SPEED;
   if (guard.lureTimer > 0) {
     guard.lureTimer -= dt;
-    if (guard.luredTo) vaultGuardWalkTo(guard, guard.luredTo.x, guard.luredTo.y, dt);
+    if (guard.luredTo) vaultGuardWalkTo(guard, guard.luredTo.x, guard.luredTo.y, dt, speedMult);
     if (guard.lureTimer <= 0) {
       guard.luredTo = null;
       guard.state = 'patrol';
     }
     return;
   }
+  if (guard.pauseTimer > 0) {
+    // Surveying: stand still, sweep the cone wide, then walk on.
+    guard.pauseTimer -= dt;
+    guard.surveyPhase += dt * 2.2;
+    guard.facing = guard.surveyBase + Math.sin(guard.surveyPhase) * 0.7;
+    if (guard.pauseTimer <= 0) guard.state = 'patrol';
+    return;
+  }
   const target = guard.waypoints[guard.waypointIndex];
-  if (vaultGuardWalkTo(guard, target.x, target.y, dt)) {
+  if (vaultGuardWalkTo(guard, target.x, target.y, dt, speedMult)) {
     guard.waypointIndex = (guard.waypointIndex + 1) % guard.waypoints.length;
+    if (guard.pauseSeconds > 0) {
+      guard.pauseTimer = guard.pauseSeconds;
+      guard.surveyBase = guard.facing;
+      guard.surveyPhase = 0;
+      guard.state = 'survey';
+    }
   }
 }
 

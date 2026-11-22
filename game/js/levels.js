@@ -46,6 +46,8 @@ function buildVaultRoom() {
     // The thief slips in through the bottom-left service door.
     playerStart: { x: 120, y: 648 },
     // Two guards walk set routes; each route is a list of waypoints.
+    // pauseSeconds: how long a guard surveys (sweeps its cone) at each
+    // waypoint before walking on — a readable beat the thief can time.
     guardRoutes: [
       {
         name: 'Rook',
@@ -54,6 +56,7 @@ function buildVaultRoom() {
           { x: 1100, y: 260 },
         ],
         speed: 72,
+        pauseSeconds: 1.0,
       },
       {
         name: 'Bishop',
@@ -61,8 +64,17 @@ function buildVaultRoom() {
           { x: 1100, y: 470 },
           { x: 300, y: 470 },
         ],
-        speed: 88,
+        speed: 100,
+        pauseSeconds: 1.6,
       },
+    ],
+    // Vent shafts: a second route through the museum. Crawl in one grate
+    // and come out the other — slow, but it slips past Rook's patrol and
+    // drops the thief at the top-left, a short dash from the diamond.
+    // Vents are the quiet route; the hall is the fast one.
+    vents: [
+      { x: 72, y: 640, r: 24, to: { x: 132, y: 142 } },
+      { x: 132, y: 142, r: 24, to: { x: 72, y: 640 } },
     ],
     // Wall cameras: fixed mounts, cones that sweep back and forth.
     cameraMounts: [
