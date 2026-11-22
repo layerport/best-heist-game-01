@@ -5,7 +5,7 @@
 // Run locally:  mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 // The grader runs it twice; both runs must write the same bytes.
 
-import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
@@ -26,14 +26,18 @@ const DOSSIER_CAPS = {
 
 // Copy one tree, directory by directory, so the output holds exactly what
 // the repository holds — no extra files, no stale files from an older run.
-function copyTreeIntoOutput(name: string): void {
+function copyTreeIntoOutput(name) {
   const from = join(repoRoot, name);
   const to = join(outputDir, name);
   cpSync(from, to, { recursive: true });
 }
 
-rmSync(outputDir, { recursive: true, force: true });
+// The grader's /output is a mount, so never remove the folder itself —
+// clear only its contents, then copy the game in fresh.
 mkdirSync(outputDir, { recursive: true });
+for (const name of readdirSync(outputDir)) {
+  rmSync(join(outputDir, name), { recursive: true, force: true });
+}
 copyTreeIntoOutput('game');
 copyTreeIntoOutput('screenshots');
 
